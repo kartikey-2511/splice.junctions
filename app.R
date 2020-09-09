@@ -1,10 +1,17 @@
-library(shiny)
+
 library(LSD)
 library(pheatmap)
 library(DT)
+library(clusterProfiler)
+library(enrichplot)
+library(ggplot2)
+
+organism = "org.Hs.eg.db"
+library(organism, character.only = TRUE)
 
 pcode="qzuivpeh"
 
+cg=readRDS("cpm/cancer.genes")
 z = readRDS("cpm/genes.name.rds")
 ref = readRDS("cpm/ref.rds")
 z = toupper(z)
@@ -19,36 +26,39 @@ ui <- fluidPage(
 	sidebarLayout(
 
 		sidebarPanel(width=3, 
-			strong(h4("You can enter either gene name or ENSEMBL id.")),
-			textInput("gene1", h5("Enter the first name/Id"),
-						value = "TSPAN6"),
-			textInput("gene2", h5("Enter the second name/Id"),
-						value = "TNMD"),
+			textInput("pwd", h3(strong(span("Enter the passcode to view the plots", style="color:#004C99;font-family: 'times'"))), value=""),
+			uiOutput("pwdr"),
 			br(),
-			h5("Please ", strong("search here"), " for valid", strong(" Gene names"), " and their ", strong("ENSEMBL ids.")),
+			h4(strong("Note:"), " This site is published and maintained by ", strong("FunGeL Lab, IIT-D")),
+			h4("You can request for the passcode at: "),
+			h5(strong(span("bb5170057@iitd.ac.in",style="color:blue"))),
+			h5(strong("Kartikey Karnatak, ")),
+			h5(strong("FunGeL Lab, Biochemical Sciences, ")),
+			h5(strong("Indian Institute of Technology, New Delhi, India")),
 			br(),
+			h5("Please ", strong("search here"), " for valid", strong(" Gene names"), " and  ", strong("ENSEMBL ids.")),
 			DTOutput("gene.list")
 		),
 			
 		mainPanel(width=9,
-			
-			fluidRow(
-				column(5,
-					h3(strong(span("Enter the passcode to view the plots", style="color:#004C99"))),
-					textInput("pwd", "", value=""),
-					uiOutput("pwdr")
-				),
-				column(7,
-					h4(strong("Note:"), " This site is published and maintained by ", strong("FunGeL Lab, IIT-D")),
-					h4("You can request for the passcode at: "),
-					h5(strong(span("bb5170057@iitd.ac.in",style="color:blue"))),
-					h5(strong("Kartikey Karnatak, ")),
-					h5(strong("FunGeL Lab, Biochemical Sciences, ")),
-					h5(strong("Indian Institute of Technology, New Delhi"))
-				)
-			),
+
+			br(),
 			tabsetPanel(type="tab",
 				tabPanel(h4(strong("Expression Plots")),
+					br(),
+					h4("You can enter either gene name or ENSEMBL id. Please refer from the table given on left for correct id/name."),
+					br(),
+					fluidRow(
+						
+						column(6,
+							textInput("gene1", h4(strong("Enter the first ENSEMBL-Id/Gene-Name")),
+									value = "TSPAN6", width='60%')
+						),
+						column(6,
+							textInput("gene2", h4(strong("Enter the second ENSEMBL-Id/Gene-Name")),
+									value = "TNMD", width='60%')
+						)
+					),
 					column(6,
 						plotOutput("ex.plot1", height=650, width=650)
 					),
@@ -58,12 +68,39 @@ ui <- fluidPage(
 				),
 				tabPanel(h4(strong("Correlation Heatmap")),
 					br(),
-					fileInput("genes", h5("Upload the file with gene names")),
+					h4("For proper and distinct viewing, it is advisable to keep the number of genes < 20"),
+					fileInput("genes", h4(strong("Upload the file with gene names"))),
 					column(6,
 						plotOutput("cor.plot1", height=650, width=650)
 					),
 					column(6,
 						plotOutput("cor.plot2", height=650, width=650)
+					)
+				),
+				tabPanel(h4(strong("GO Enrichment")),
+					br(),
+					column(4,
+						selectInput("go_gene", h4(strong("Select the cancer-related gene of interest")),
+									choices=c(cg[,2]), selected=cg[1,2]),
+						br(),
+						selectInput("go_choice", h4(strong("Select the result to be displayed")),
+									choices=c("Dot Plot","Enrichment Map","Ridge Plot","GSEA Plot","gse data table"	), selected="Dot Plot"),
+						numericInput("go_num", h5(strong("Give the no. of categories to show on plot")),
+									value=15),
+						numericInput("go_id", h5(strong("Give the gene id for GSEA plot")),
+									value=1),
+						br(),
+						h4(strong(span("Guidelines:", style="color:blue"))),
+						h5("1. The genes available for this section are the ", strong("relevant cancer genes"), " published at ", strong("nature.com/articles/s41436-020-0880-8")),
+						h5("2. From the 2nd drop-down menu, select the option ", strong("'gse data table'"), " to view the details of ", strong("enriched terms for the selected gene.")),
+						h5("3. If the ", strong("no. of categories"), " input is 15, then the 15 ", strong("top most significant enriched terms"), " are displayed on the plots."),
+						h5("4. The ", strong("gene id"), " for the GSEA plot should be an ", strong("integer>0 and no more than the number of rows"), " in the 'gse data table'."),
+						h5("5. If you would like to get the enrichment data for a gene not currently available, please drop a mail at the contact id provided.")
+					),
+					column(8,
+						uiOutput("err_txt"),
+						DTOutput("gse_list"),
+						plotOutput("gse_plot", height=800, width=800)
 					)
 				)
 			)
@@ -72,6 +109,50 @@ ui <- fluidPage(
 )
 
 server <- function(input, output) {
+
+	gse_obj = reactive({
+		s = input$go_gene
+		pos = strtoi(cg[s,3])
+		gseSet = floor(pos/10)+1
+		pos = (pos+1)%%10
+		gse = readRDS(paste("gseList.",gseSet,sep=""))[[pos]]
+		return(gse)
+	})
+
+	output$err_txt = renderUI({
+		if (dim(gse_obj())[1]==0)
+			tags$h4(strong(span("No enriched terms for this gene for p-value cutoff of 0.05", style="color:red")))
+		})
+
+	output$gse_list = renderDT({
+		if (input$pwd==pcode) {
+			if (input$go_choice=="gse data table") {
+				gse = gse_obj()
+				if (dim(gse)[1]!=0) {
+					gse = as.data.frame(gse)
+					rownames(gse) = NULL
+					gse = gse[,c(1:5,8)]
+					datatable(gse)
+				}
+			}
+		}
+	})
+
+	output$gse_plot = renderPlot({
+		if (input$pwd==pcode) {
+			gse = gse_obj()
+			if (dim(gse)[1]!=0) {
+				if (input$go_choice=="Dot Plot")
+					dotplot(gse, showCategory=input$go_num, split=".sign") + facet_grid(.~.sign)
+				else if (input$go_choice=="Enrichment Map")
+					emapplot(gse, showCategory=input$go_num)
+				else if (input$go_choice=="Ridge Plot")
+					ridgeplot(gse, showCategory=input$go_num) + labs(x = "enrichment distribution")
+				else if (input$go_choice=="GSEA Plot")
+					gseaplot(gse, by = "all", title = gse$Description[input$go_id], geneSetID=input$go_id)
+			}
+		}
+	})
 
 	input_file <- reactive({
     if (is.null(input$genes)) {
